@@ -1,0 +1,51 @@
+R
+    R
+        lhs :: R
+            input:
+            output:
+        x :: X
+            input:13,14
+            output:11,12
+            14 --> 11
+            13 --> 12
+X
+    X
+        l :: Y
+            input:16
+            output:15
+            19 --> 15
+        lhs :: X
+            input:19,20
+            output:21,22
+            16 --> 21
+            18 --> 22
+        r :: Y
+            input:18
+            output:17
+            20 --> 17
+Y
+    Y1
+        lhs :: Y
+            input:27
+            output:28
+            26 --> 28
+        z :: Z
+            input:25,26
+            output:23,24
+            27 --> 24
+    Y2
+        lhs :: Y
+            input:33
+            output:34
+            31 --> 34
+        z :: Z
+            input:31,32
+            output:29,30
+            33 --> 29
+Z
+    Z
+        lhs :: Z
+            input:35,36
+            output:37,38
+            36 --> 37
+            35 --> 38

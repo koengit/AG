@@ -1,0 +1,23 @@
+Tree
+    Leaf
+        lhs :: Tree
+            input:5,6
+            output:7,8
+            5 --> 7
+            6 --> 8
+    Bin
+        l :: Tree
+            input:11,12
+            output:9,10
+            17 --> 9
+            16 --> 10
+        lhs :: Tree
+            input:17,18
+            output:19,20
+            15 --> 19
+            12 --> 20
+        r :: Tree
+            input:15,16
+            output:13,14
+            11 --> 13
+            18 --> 14

@@ -1,0 +1,12 @@
+First, install MiniSat for Haskell.
+
+The easiest way to do this (right now) is to clone
+
+  git@github.com:nick8325/jukebox.git
+
+and then run
+
+  scripts/minisat-install
+
+This performs all the necessary magic to have MiniSat as a normal Haskell library.
+

@@ -1,0 +1,115 @@
+Body
+    Body
+        ds :: Dats
+            input:26,27
+            output:25
+            31 --> 25
+        fs :: Funs
+            input:29
+            output:28
+            30 --> 28
+        lhs :: Body
+            input:30,31
+            output:32,33,34
+            26 --> 32
+            29 --> 33
+            27 --> 34
+Dat
+    Dat
+        lhs :: Dat
+            input:35
+            output:36,37
+            35 --> 36
+            35 --> 37
+Dats
+    Cons
+        hd :: Dat
+            input:39,40
+            output:38
+            44 --> 38
+        lhs :: Dats
+            input:44
+            output:45,46
+            39 --> 45
+            42 --> 45
+            40 --> 46
+            43 --> 46
+        tl :: Dats
+            input:42,43
+            output:41
+            40 --> 41
+    Nil
+        lhs :: Dats
+            input:47
+            output:48,49
+Fun
+    Fun
+        lhs :: Fun
+            input:50
+            output:51
+            50 --> 51
+Funs
+    Cons
+        hd :: Fun
+            input:53
+            output:52
+            56 --> 52
+        lhs :: Funs
+            input:56
+            output:57
+            53 --> 57
+            55 --> 57
+        tl :: Funs
+            input:55
+            output:54
+            56 --> 54
+    Nil
+        lhs :: Funs
+            input:58
+            output:59
+Module
+    Module
+        b :: Body
+            input:62,63,64
+            output:60,61
+            67 --> 60
+            68 --> 61
+        h :: TySigs
+            input:66,67
+            output:65
+            64 --> 65
+        lhs :: Module
+            input:68
+            output:69,70
+            62 --> 69
+            63 --> 69
+            66 --> 69
+            67 --> 69
+            63 --> 70
+TySig
+    TySig
+        lhs :: TySig
+            input:71
+            output:72,73
+            71 --> 72
+TySigs
+    Cons
+        hd :: TySig
+            input:75,76
+            output:74
+            80 --> 74
+        lhs :: TySigs
+            input:80
+            output:81,82
+            75 --> 81
+            78 --> 81
+            76 --> 82
+            79 --> 82
+        tl :: TySigs
+            input:78,79
+            output:77
+            80 --> 77
+    Nil
+        lhs :: TySigs
+            input:83
+            output:84,85
