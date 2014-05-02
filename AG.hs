@@ -9,6 +9,7 @@ import qualified Data.IntMap as M
 import qualified Data.Set as S
 import System.Environment
 import System.IO
+import qualified Queue as Q
 
 --------------------------------------------------------------------------------
 
@@ -176,18 +177,25 @@ add (a,b,e,c) = M.adjust (((b,e,c):))     a
 -- 3. new edges are always blue
 
 noCycles :: Solver -> Graph -> IO ()
-noCycles sat graph | M.null graph =
+noCycles sat graph =
+  removeSimplicial sat graph (Q.fromList [ (a,weight xs) | (a,xs) <- M.toList graph ])
+
+type Queue = Q.Queue Node Int
+
+removeSimplicial :: Solver -> Graph -> Queue -> IO ()
+removeSimplicial sat graph queue | M.null graph =
   do return ()
 
-noCycles sat graph =
+removeSimplicial sat graph queue =
   do news <- sequence [ triangle sat graph p q | (p,q) <- bluePairs neighs ]
      let graph' = foldr add (foldr (M.adjust remNode) (M.delete node graph) bs) (concat news)
-     noCycles sat graph'
+     removeSimplicial sat graph' (foldr (uncurry Q.insert) queue' [ (b, weigh b graph') | b <- bs ])
  where
-  node        = snd $ minimum [ (weight xs, a) | (a,xs) <- M.toList graph ]
-  Just neighs = M.lookup node graph
-  bs          = [ b | (b,_,_) <- neighs ]
-  remNode bs  = [ b | b@(a,_,_) <- bs, a /= node ]
+  Just ((node,_),queue') = Q.minView queue
+  Just neighs       = M.lookup node graph
+  bs                = [ b | (b,_,_) <- neighs ]
+  remNode bs        = [ b | b@(a,_,_) <- bs, a /= node ]
+  weigh a           = weight . fromJust . M.lookup a
 
 bluePairs :: [Neigh] -> [(Neigh,Neigh)]
 bluePairs as = [ (p,q) | p <- greens, q <- blues ] ++ pairs blues
