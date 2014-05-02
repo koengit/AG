@@ -258,7 +258,7 @@ constraintsNonTerminals sat ts nts =
                            ]
             g <- mkGraph sat [ (a, b, e, Blue) | (a, b, e) <- es ]
             noCycles sat g
-            putStr (show (length es) ++ " edges\n")
+            putStrLn (show (length es) ++ " edges")
             return (tp, es)
        | t <- ts
        , let (tp, ins, outs) = ntAttrs t
@@ -274,11 +274,16 @@ constraintsProductions sat ts nts ntgs =
             hFlush stdout
             g <- mkGraph sat graph
             noCycles sat g
-            putStrLn "OK"
+            putStrLn (show (M.size g) ++ " nodes")
        | Type tp rs <- ts
        , Rule r fs <- rs
        , let graph = concat
-                     [ [ (a, b, true, Blue) | (a,b) <- deps, assert "loop" (a /= b) ]
+                     [ -- edges from production rule
+                       [ (a, b, true, Blue)
+                       | (a,b) <- deps
+                       , assert "self-loop" (a /= b)
+                       ]
+                       -- edges from non-terminal
                     ++ [ (inn a, out b, e, Green)
                        | (a, b, e) <- es
                        ]
@@ -290,8 +295,10 @@ constraintsProductions sat ts nts ntgs =
                            es           = head [ es | (tp',es) <- ntgs, tp == tp' ]
                            inn a        = head [ a' | (a0,a') <- ins0 `zip` ins', a == a0 ]
                            out b        = head [ b' | (b0,b') <- outs0 `zip` outs', b == b0 ]
+
                      , assert (r ++ "::" ++ tp ++ ".ins") (length ins' == length ins0)
-                     , assert (r ++ "::" ++ tp ++ ".outs") (length outs' == length outs0)                      ]
+                     , assert (r ++ "::" ++ tp ++ ".outs") (length outs' == length outs0)
+                     ]
        ]
  where
   argType []  = ""
