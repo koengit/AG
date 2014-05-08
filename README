@@ -10,3 +10,7 @@ and then run
 
 This performs all the necessary magic to have MiniSat as a normal Haskell library.
 
+Second, install PSQueues:
+
+  cabal install psqueue
+

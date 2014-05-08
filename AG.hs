@@ -9,7 +9,7 @@ import qualified Data.IntMap as M
 import qualified Data.Set as S
 import System.Environment
 import System.IO
-import qualified Queue as Q
+import qualified Data.PSQueue as Q
 
 --------------------------------------------------------------------------------
 
@@ -178,9 +178,9 @@ add (a,b,e,c) = M.adjust (((b,e,c):))     a
 
 noCycles :: Solver -> Graph -> IO ()
 noCycles sat graph =
-  removeSimplicial sat graph (Q.fromList [ (a,weight xs) | (a,xs) <- M.toList graph ])
+  removeSimplicial sat graph (Q.fromList [ a Q.:-> weight xs | (a,xs) <- M.toList graph ])
 
-type Queue = Q.Queue Node Int
+type Queue = Q.PSQ Node Int
 
 removeSimplicial :: Solver -> Graph -> Queue -> IO ()
 removeSimplicial sat graph queue | M.null graph =
@@ -191,7 +191,7 @@ removeSimplicial sat graph queue =
      let graph' = foldr add (foldr (M.adjust remNode) (M.delete node graph) bs) (concat news)
      removeSimplicial sat graph' (foldr (uncurry Q.insert) queue' [ (b, weigh b graph') | b <- bs ])
  where
-  Just ((node,_),queue') = Q.minView queue
+  Just ((node Q.:-> _),queue') = Q.minView queue
   Just neighs       = M.lookup node graph
   bs                = [ b | (b,_,_) <- neighs ]
   remNode bs        = [ b | b@(a,_,_) <- bs, a /= node ]
