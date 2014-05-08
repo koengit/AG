@@ -9,6 +9,7 @@ import qualified Data.IntMap as M
 import qualified Data.Set as S
 import System.Environment
 import System.IO
+import Control.Monad
 
 --------------------------------------------------------------------------------
 
@@ -129,15 +130,21 @@ type Edge  = (Node,Node,Lit,Color)
 
 type Neigh = (Node,Lit,Color)
 
-type Graph = Map [Neigh]
+type Graph = Map (Map Lit, Map Lit) -- (green,blue)
 
 mkGraph :: Solver -> [Edge] -> IO Graph
 mkGraph sat tups =
   do tups' <- smashEdges sat tups
-     return $ M.fromListWith (++) $ concat $
-       [ [(a, [(b,e,c)]), (b, [(a,neg e,c)])]
-       | (a,b,e,c) <- tups'
-       ]
+     let greens = [ [(a, (M.singleton b e,M.empty)), 
+                     (b, (M.singleton a (neg e),M.empty))]
+                  | (a,b,e,Green) <- tups'
+                  ]
+     let blues = [ [(a, (M.empty, M.singleton b e)),
+                     (b, (M.empty, M.singleton a (neg e)))]
+                  | (a,b,e,Blue) <- tups'
+                  ]
+     return $ M.fromListWith comb $ concat $ blues ++ greens
+       where comb (g1,b1) (g2,b2) = (g1 `M.union` g2, b1 `M.union` b2)
 
 smashEdges :: Solver -> [Edge] -> IO [Edge]
 smashEdges sat = sequence . map smash . groupBy nodes . sort . map norm
@@ -164,9 +171,15 @@ smashEdges sat = sequence . map smash . groupBy nodes . sort . map norm
   smashColor _ Green = Green
   smashColor _ _     = Blue
 
-add :: Edge -> Graph -> Graph
-add (a,b,e,c) = M.adjust (((b,e,c):))     a
-              . M.adjust (((a,neg e,c):)) b
+
+remNode :: Node -> Graph -> Graph
+remNode node g = M.map (\(g,b) -> (M.delete node g, M.delete node b)) $ 
+                 M.delete node g
+
+addBlue :: Node -> Node -> Lit -> Graph -> Graph
+addBlue a b e = single a b e . single b a (neg e) where
+  single :: Node -> Node -> Lit -> Graph -> Graph
+  single a b e = M.adjustWithKey (\_ (mg,mb) -> (mg, M.insert b e mb)) a
 
 --------------------------------------------------------------------------------
 
@@ -178,49 +191,46 @@ add (a,b,e,c) = M.adjust (((b,e,c):))     a
 noCycles :: Solver -> Graph -> IO ()
 noCycles sat graph | M.null graph =
   do return ()
-
 noCycles sat graph =
-  do news <- sequence [ triangle sat graph p q | (p,q) <- bluePairs neighs ]
-     let graph' = foldr add (foldr (M.adjust remNode) (M.delete node graph) bs) (concat news)
-     noCycles sat graph'
+  do g' <- foldM (\g (p,q) -> triangle sat p q g) graph (bluePairs neighs)
+     noCycles sat (remNode node g')
  where
-  node        = snd $ minimum [ (weight xs, a) | (a,xs) <- M.toList graph ]
-  Just neighs = M.lookup node graph
-  bs          = [ b | (b,_,_) <- neighs ]
-  remNode bs  = [ b | b@(a,_,_) <- bs, a /= node ]
+   node        = snd $ minimum [ (weight xs, a) | (a,xs) <- M.toList graph ]
+   Just neighs = M.lookup node graph
 
-bluePairs :: [Neigh] -> [(Neigh,Neigh)]
-bluePairs as = [ (p,q) | p <- greens, q <- blues ] ++ pairs blues
+bluePairs :: (Map Lit, Map Lit) -> [(Neigh,Neigh)]
+bluePairs (mg,mb) = [ (p,q) | p <- greens, q <- blues ] ++ pairs blues
  where
-  greens = [ a | a@(_,_,Green) <- as ]
-  blues  = [ a | a@(_,_,Blue)  <- as ]
+  greens = [ (n,l,Green) | (n,l) <- M.toList mg ]
+  blues  = [ (n,l,Blue)  | (n,l) <- M.toList mb ]
 
-weight :: [Neigh] -> Int
-weight xs = g * b + b * b
+
+weight :: (Map Lit, Map Lit) -> Int
+weight (mg,mb) = g * b + b * b
  where
-  g = length [ x | x@(_,_,Green) <- xs ]
-  b = length [ x | x@(_,_,Blue) <- xs ]
+  g = M.size mg
+  b = M.size mb
 
-triangle :: Solver -> Graph -> Neigh -> Neigh -> IO [Edge]
-triangle sat graph (a,ea,ca) (b,eb,cb) =
+triangle :: Solver -> Neigh -> Neigh -> Graph -> IO Graph
+triangle sat (a,ea,ca) (b,eb,cb) graph =
   case M.lookup a graph of
-    Just as ->
-      case [ (e,c) | (a',e,c) <- as, a' == b ] of
-        [] ->
-          do ab <- newLit sat
-             addTriangle ea eb ab
-             return [(a,b,ab,Blue)]
-           
-        [(ab,c)] ->
-          do if c == Blue || (ca == Blue && cb == Blue)
-               then addTriangle ea eb ab
-               else return ()
-             return []
+    Just (mg,mb) ->
+      case M.lookup b mg of -- green edge
+        Just ab -> if ca == Blue && cb == Blue
+                   then addTriangle ea eb ab
+                   else return graph
+        Nothing -> case M.lookup b mb of -- blue edge
+          Nothing ->
+            do ab <- newLit sat
+               addTriangle ea eb ab
+               return $ addBlue a b ab graph
+          Just ab -> addTriangle ea eb ab
  where
   addTriangle ea eb ab =
     do addClause sat [ea,ab,neg eb]     -- one must point n -> a -> b -> n
        addClause sat [neg ea,neg ab,eb] -- one must point n <- a <- b <- n
-       return ()
+       return graph
+
 
 pairs :: [a] -> [(a,a)]
 pairs []     = []
@@ -310,4 +320,3 @@ constraintsProductions sat ts nts ntgs =
 assert :: String -> Bool -> Bool
 assert s True  = True
 assert s False = error s
-
