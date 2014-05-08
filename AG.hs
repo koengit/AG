@@ -7,6 +7,7 @@ import Data.List
 import Data.Maybe
 import qualified Data.IntMap as M
 import qualified Data.Set as S
+import qualified Data.Array.IO as A
 import System.Environment
 import System.IO
 import Control.Monad
@@ -130,21 +131,26 @@ type Edge  = (Node,Node,Lit,Color)
 
 type Neigh = (Node,Lit,Color)
 
-type Graph = Map (Map Lit, Map Lit) -- (green,blue)
+type SGraph = A.IOArray Node (Map Lit)
+type Graph = (SGraph, SGraph) -- (green, blue)
 
 mkGraph :: Solver -> [Edge] -> IO Graph
 mkGraph sat tups =
   do tups' <- smashEdges sat tups
-     let greens = [ [(a, (M.singleton b e,M.empty)), 
-                     (b, (M.singleton a (neg e),M.empty))]
-                  | (a,b,e,Green) <- tups'
-                  ]
-     let blues = [ [(a, (M.empty, M.singleton b e)),
-                     (b, (M.empty, M.singleton a (neg e)))]
-                  | (a,b,e,Blue) <- tups'
-                  ]
-     return $ M.fromListWith comb $ concat $ blues ++ greens
-       where comb (g1,b1) (g2,b2) = (g1 `M.union` g2, b1 `M.union` b2)
+     let nodes = concat [[a,b] | (a,b,_,_) <- tups' ]
+         maxNode | null tups' = 0
+                 | otherwise  = maximum nodes
+         minNode | null tups' = 0
+                 | otherwise  = minimum nodes
+     green <- mkSGraph (minNode,maxNode) [ (a,b,e) | (a,b,e,Green) <- tups' ]
+     blue  <- mkSGraph (minNode,maxNode) [ (a,b,e) | (a,b,e,Blue) <- tups' ]
+     return $ (green, blue)
+     where
+       mkSGraph :: (Node,Node) -> [(Node, Node, Lit)] -> IO SGraph
+       mkSGraph bound edges = do
+         g <- A.newArray bound M.empty
+         mapM_ (\(a,b,e) -> addEdge a b e g) edges
+         return g
 
 smashEdges :: Solver -> [Edge] -> IO [Edge]
 smashEdges sat = sequence . map smash . groupBy nodes . sort . map norm
@@ -171,16 +177,24 @@ smashEdges sat = sequence . map smash . groupBy nodes . sort . map norm
   smashColor _ Green = Green
   smashColor _ _     = Blue
 
+addEdge :: Node -> Node -> Lit -> SGraph -> IO ()
+addEdge a b e g = single a b e >> single b a (neg e) where
+  single :: Node -> Node -> Lit -> IO ()
+  single a b e = modifyArray g a $! M.insert b e
 
-remNode :: Node -> Graph -> Graph
-remNode node g = M.map (\(g,b) -> (M.delete node g, M.delete node b)) $ 
-                 M.delete node g
+remNode :: Node -> Graph -> IO ()
+remNode node (gg,bg) = remNode' gg >> remNode' bg where
+  remNode' :: SGraph -> IO ()
+  remNode' g = do
+    outedges <- A.readArray g node
+    mapM_ (\n -> modifyArray g n $ M.delete node) $ M.keys outedges
 
-addBlue :: Node -> Node -> Lit -> Graph -> Graph
-addBlue a b e = single a b e . single b a (neg e) where
-  single :: Node -> Node -> Lit -> Graph -> Graph
-  single a b e = M.adjustWithKey (\_ (mg,mb) -> (mg, M.insert b e mb)) a
+graphKeys :: Graph -> IO [Node]
+graphKeys (gg,_) = A.getBounds gg >>= return . A.range
 
+-- Why is this not in some standard lib?
+modifyArray :: (A.MArray a e m, A.Ix i) => a i e -> i -> (e -> e) -> m ()
+modifyArray a i f = A.readArray a i >>= \v -> A.writeArray a i (f v)
 --------------------------------------------------------------------------------
 
 -- rules:
@@ -189,48 +203,53 @@ addBlue a b e = single a b e . single b a (neg e) where
 -- 3. new edges are always blue
 
 noCycles :: Solver -> Graph -> IO ()
-noCycles sat graph | M.null graph =
-  do return ()
-noCycles sat graph =
-  do g' <- foldM (\g (p,q) -> triangle sat p q g) graph (bluePairs neighs)
-     noCycles sat (remNode node g')
- where
-   node        = snd $ minimum [ (weight xs, a) | (a,xs) <- M.toList graph ]
-   Just neighs = M.lookup node graph
+noCycles sat graph@(gg,bg) = graphKeys graph >>= noCycles' . S.fromList where
+  noCycles' :: S.Set Node -> IO ()
+  noCycles' nodes | S.null nodes = return ()
+  noCycles' nodes =
+    do wn <- mapM (\n -> weight graph n >>= \w -> return (w,n)) $ 
+             S.toList nodes
+       let node = snd $ minimum wn
+       mg <- A.readArray gg node
+       mb <- A.readArray bg node
+       mapM_ (\(p,q) -> triangle sat p q graph) (bluePairs mg mb)
+       remNode node graph
+       noCycles' (S.delete node nodes)
 
-bluePairs :: (Map Lit, Map Lit) -> [(Neigh,Neigh)]
-bluePairs (mg,mb) = [ (p,q) | p <- greens, q <- blues ] ++ pairs blues
+bluePairs :: Map Lit -> Map Lit -> [(Neigh,Neigh)]
+bluePairs mg mb = [ (p,q) | p <- greens, q <- blues ] ++ pairs blues
  where
   greens = [ (n,l,Green) | (n,l) <- M.toList mg ]
   blues  = [ (n,l,Blue)  | (n,l) <- M.toList mb ]
 
+weight :: Graph -> Node -> IO Int
+weight (gg,bg) node = do
+  mg <- A.readArray gg node
+  mb <- A.readArray bg node
+  let g = M.size mg
+      b = M.size mb
+  return $ g * b + b * b
 
-weight :: (Map Lit, Map Lit) -> Int
-weight (mg,mb) = g * b + b * b
- where
-  g = M.size mg
-  b = M.size mb
-
-triangle :: Solver -> Neigh -> Neigh -> Graph -> IO Graph
-triangle sat (a,ea,ca) (b,eb,cb) graph =
-  case M.lookup a graph of
-    Just (mg,mb) ->
-      case M.lookup b mg of -- green edge
-        Just ab -> if ca == Blue && cb == Blue
-                   then addTriangle ea eb ab
-                   else return graph
-        Nothing -> case M.lookup b mb of -- blue edge
-          Nothing ->
-            do ab <- newLit sat
-               addTriangle ea eb ab
-               return $ addBlue a b ab graph
-          Just ab -> addTriangle ea eb ab
- where
-  addTriangle ea eb ab =
-    do addClause sat [ea,ab,neg eb]     -- one must point n -> a -> b -> n
-       addClause sat [neg ea,neg ab,eb] -- one must point n <- a <- b <- n
-       return graph
-
+triangle :: Solver -> Neigh -> Neigh -> Graph -> IO ()
+triangle sat (a,ea,ca) (b,eb,cb) (gg,bg) = do
+  mg <- A.readArray gg a
+  case M.lookup b mg of -- green edge        
+    Just ab -> if ca == Blue && cb == Blue
+               then addTriangle ea eb ab
+               else return ()
+    Nothing -> do
+      mb <- A.readArray bg a
+      case M.lookup b mb of -- blue edge
+        Just ab -> addTriangle ea eb ab
+        Nothing ->
+          do ab <- newLit sat
+             addTriangle ea eb ab
+             addEdge a b ab (bg)
+  where
+    addTriangle ea eb ab =
+      do addClause sat [ea,ab,neg eb]     -- one must point n -> a -> b -> n
+         addClause sat [neg ea,neg ab,eb] -- one must point n <- a <- b <- n
+         return ()
 
 pairs :: [a] -> [(a,a)]
 pairs []     = []
@@ -283,8 +302,9 @@ constraintsProductions sat ts nts ntgs =
        [ do putStr (r ++ " :: " ++ argType fs ++ tp ++ " ... ")
             hFlush stdout
             g <- mkGraph sat graph
+            ns <- graphKeys g
             noCycles sat g
-            putStrLn (show (M.size g) ++ " nodes")
+            putStrLn (show (length ns) ++ " nodes")
        | Type tp rs <- ts
        , Rule r fs <- rs
        , let graph = concat
