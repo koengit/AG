@@ -246,6 +246,7 @@ main =
          nts = map ntAttrs ts
      
      sat <- newSolver
+     eliminate sat True
      ntgs <- constraintsNonTerminals sat ts nts
      constraintsProductions sat ts nts ntgs
 
@@ -255,6 +256,11 @@ main =
      putStrLn ("have " ++ show nv ++ " vars, " ++ show nc ++ " clauses")
      b <- solve sat []
      print b
+     assigns <- minisat_num_assigns sat
+     putStrLn $ "Assigns = " ++ show assigns
+     conflicts <- minisat_num_conflicts sat
+     putStrLn $ "Conflicts = " ++ show conflicts
+     
 
 constraintsNonTerminals :: Solver -> [Type] -> [(Name,[Attr],[Attr])] -> IO [(Name,[(Attr,Attr,Lit)])]
 constraintsNonTerminals sat ts nts =
