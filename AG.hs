@@ -284,7 +284,7 @@ main =
                              , attr `elem` outs
                              ]
             putStrLn ("trying to let " ++ show attr ++ " for " ++ tp ++ " depend on as few inputs as possible...")
-            is <- localMinimum sat [ e | (tp',es) <- ntgs, tp' == tp, (a,b,e) <- es, b == attr' ]
+            is <- globalMinimum sat [ e | (tp',es) <- ntgs, tp' == tp, (a,b,e) <- es, b == attr' ]
             putStrLn (show attr ++ " now depends on " ++ show (length is) ++ " inputs")
 
        _ ->
@@ -377,6 +377,88 @@ localMinimum sat xs =
                 do addClause sat [neg a]
                    return xs
       in try xs
+
+--------------------------------------------------------------------------------
+
+globalMinimum :: Solver -> [Lit] -> IO [Lit]
+globalMinimum sat xs =
+  do ys <- sort sat xs
+     let mini (i,j) | i >= j =
+           do return ()
+         
+         mini (i,j) =
+           do putStrLn ("trying " ++ show (i,j))
+              b <- solve sat [neg (ys !! k)]
+              solveStats sat
+              if b then mini (k+1,j)
+                   else mini (i,k)
+          where
+           k = (i+j) `div` 2
+      in mini (0,length ys)
+     xbs <- sequence [ do v <- modelValue sat x
+                          return (x,v)
+                     | x <- xs
+                     ]
+     return [ x | (x,Just True) <- xbs ]
+ where
+  sort sat []  = do return []
+  sort sat [x] = do return [x]
+  sort sat xs  = do as <- sort sat (take k xs)
+                    bs <- sort sat (drop k xs)
+                    map fromJust `fmap` merge (map Just as) (map Just bs)
+   where
+    k = length xs `div` 2
+
+  merge2 Nothing b = return (b, Nothing)
+  merge2 a Nothing = return (a, Nothing)
+  merge2 (Just x) (Just y) =
+    do a <- newLit sat
+       b <- newLit sat
+       addClause sat [neg x, b]
+       addClause sat [neg y, b]
+       addClause sat [neg x, neg y, a]
+       --addClause sat [x, neg a]
+       --addClause sat [y, neg a]
+       --addClause sat [x, y, neg b]
+       return (Just a,Just b)
+  
+  merge []  bs  = return bs
+  merge as  []  = return as
+  merge [a] [b] = (\(a,b) -> [a,b]) `fmap` merge2 a b
+  merge as  bs  = take (a+b) `fmap` merge' (as ++ xas) (bs ++ xbs)
+   where
+    a   = length as
+    b   = length bs
+    m   = a `max` b
+    n   = if even m then m else m+1
+    xas = replicate (n-a) Nothing
+    xbs = replicate (n-b) Nothing
+  
+  -- pre: as and bs have the same, even length
+  merge' as bs =
+    do xs <- merge eas ebs
+       ys <- merge oas obs
+       let x:xys = weave xs ys
+       xys' <- sequence [ merge2 a b | (a,b) <- pairs xys ]
+       return (x : unpairs xys' ++ [last xys])
+   where
+    (eas,oas) = evenOdds as
+    (ebs,obs) = evenOdds bs
+
+  evenOdds []       = ([], [])
+  evenOdds [x]      = ([x], [])
+  evenOdds (x:y:xs) = (x:es,y:os)
+   where
+    (es,os) = evenOdds xs
+
+  pairs (x:y:xs) = (x,y) : pairs xs
+  pairs _        = []
+  
+  unpairs ((x,y):xys) = x : y : unpairs xys
+  unpairs []          = []
+  
+  weave (x:xs) (y:ys) = x : y : weave xs ys
+  weave xs     ys     = xs ++ ys
 
 --------------------------------------------------------------------------------
 
