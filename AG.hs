@@ -8,6 +8,7 @@ import Data.Maybe
 import qualified Data.IntMap as M
 import qualified Data.Set as S
 import System.Environment
+import System.Exit
 import System.IO
 import Control.Monad
 
@@ -238,14 +239,29 @@ pairs (x:xs) = [ (x,y) | y <- xs ] ++ pairs xs
 
 --------------------------------------------------------------------------------
 
+type Args = (FilePath, Maybe (Name, Attr))
+
+parseArgs :: IO Args
+parseArgs =
+  do as <- getArgs
+     case as of
+       [file]                            -> return (file, Nothing)
+       [file,tp,attr] | all isDigit attr -> return (file, Just (tp, read attr))
+       _                                 -> do putStr $ unlines
+                                                 [ "Usage: AG <file>"
+                                                 , "   or: AG <file> <type> <attr>"
+                                                 ]
+                                               exitWith (ExitFailure 1)
+
 main :: IO ()
 main =
-  do [file] <- getArgs
+  do (file, mobj) <- parseArgs
      s <- readFile file
      let ts  = parse s
          nts = map ntAttrs ts
      
      sat <- newSolver
+     eliminate sat True -- switch off simplification
      ntgs <- constraintsNonTerminals sat ts nts
      constraintsProductions sat ts nts ntgs
 
@@ -254,7 +270,24 @@ main =
      nc <- minisat_num_clauses sat
      putStrLn ("have " ++ show nv ++ " vars, " ++ show nc ++ " clauses")
      b <- solve sat []
+     solveStats sat
      print b
+     case (b, mobj) of
+       (True, Just (tp,attr)) ->
+         do putStrLn "-- OPTIMIZING --"
+            let attr' = head [ length ins + length (takeWhile (/= attr) outs)
+                             | Type tp' rs <- ts
+                             , tp' == tp
+                             , Rule _ fs <- rs
+                             , Field "lhs" _ ins outs _ <- fs
+                             , attr `elem` outs
+                             ]
+            putStrLn ("trying to let " ++ show attr ++ " for " ++ tp ++ " depend on as few inputs as possible...")
+            is <- localMinimum sat [ e | (tp',es) <- ntgs, tp' == tp, (a,b,e) <- es, b == attr' ]
+            putStrLn (show attr ++ " now depends on " ++ show (length is) ++ " inputs")
+
+       _ ->
+         do return ()
 
 constraintsNonTerminals :: Solver -> [Type] -> [(Name,[Attr],[Attr])] -> IO [(Name,[(Attr,Attr,Lit)])]
 constraintsNonTerminals sat ts nts =
@@ -314,6 +347,35 @@ constraintsProductions sat ts nts ntgs =
   argType []  = ""
   argType [f] = typeField f ++ " -> "
   argType fs  = "(" ++ concat (intersperse ", " (map typeField fs)) ++ ") -> "
+
+--------------------------------------------------------------------------------
+
+solveStats :: Solver -> IO ()
+solveStats sat =
+  do n <- minisat_num_assigns sat
+     m <- minisat_num_conflicts sat
+     putStrLn ("assigns: " ++ show n ++ ", conflicts: " ++ show m)
+
+--------------------------------------------------------------------------------
+
+localMinimum :: Solver -> [Lit] -> IO [Lit]
+localMinimum sat xs =
+  do a <- newLit sat
+     let try xs =
+           do putStrLn ("currently, " ++ show (length xs) ++ " literals")
+              addClause sat (map neg (a : xs)) -- "if a, then one of the xs must be False"
+              b <- solve sat [a]
+              solveStats sat
+              if b then
+                do xbs <- sequence [ do v <- modelValue sat x
+                                        return (x,v)
+                                   | x <- xs
+                                   ]
+                   try [ x | (x,Just True) <- xbs ]
+               else
+                do addClause sat [neg a]
+                   return xs
+      in try xs
 
 --------------------------------------------------------------------------------
 
