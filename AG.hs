@@ -272,6 +272,7 @@ main =
      b <- solve sat []
      solveStats sat
      print b
+
      case (b, mobj) of
        (True, Just (tp,attr)) ->
          do putStrLn "-- OPTIMIZING --"
