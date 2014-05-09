@@ -284,7 +284,7 @@ main =
                              , attr `elem` outs
                              ]
             putStrLn ("trying to let " ++ show attr ++ " for " ++ tp ++ " depend on as few inputs as possible...")
-            is <- globalMinimum sat [ e | (tp',es) <- ntgs, tp' == tp, (a,b,e) <- es, b == attr' ]
+            is <- localMinimum sat [ e | (tp',es) <- ntgs, tp' == tp, (a,b,e) <- es, b == attr' ]
             putStrLn (show attr ++ " now depends on " ++ show (length is) ++ " inputs")
 
        _ ->
@@ -372,6 +372,7 @@ localMinimum sat xs =
                                         return (x,v)
                                    | x <- xs
                                    ]
+                   sequence_ [ addClause sat [neg a, x] | (x,b) <- xbs, b /= Just True ]
                    try [ x | (x,Just True) <- xbs ]
                else
                 do addClause sat [neg a]
