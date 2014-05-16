@@ -418,9 +418,9 @@ globalMinimum sat xs =
        addClause sat [neg x, b]
        addClause sat [neg y, b]
        addClause sat [neg x, neg y, a]
-       --addClause sat [x, neg a]
-       --addClause sat [y, neg a]
-       --addClause sat [x, y, neg b]
+       addClause sat [x, neg a]
+       addClause sat [y, neg a]
+       addClause sat [x, y, neg b]
        return (Just a,Just b)
   
   merge []  bs  = return bs
