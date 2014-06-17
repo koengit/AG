@@ -292,8 +292,8 @@ main =
                         opti (Just (sum as - 1))
                     else
                      do putStrLn "(sum is optimal)"
-          --opti Nothing
-          solve sat []
+          opti Nothing
+          --solve sat []
           as <- sequence [ modelNumber sat n | n <- numbs ]
           let mopti [] =
                 do putStrLn "(maxima are optimal)"
