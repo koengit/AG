@@ -271,24 +271,63 @@ main =
      putStrLn ("have " ++ show nv ++ " vars, " ++ show nc ++ " clauses")
      b <- solve sat []
      solveStats sat
-     print b
+     if b then
+       do putStrLn "++ SOLUTION FOUND ++"
+          numbs <- sequence [ visitsNonTerminal sat 50 edges | (_,edges) <- ntgs ]
+          total@(N xs _) <- plusList sat numbs
+          let show2 x | x < 10    = " " ++ show x
+                      | otherwise = show x
+          
+              opti mayn =
+                do b <- solve sat [total .<= n | Just n <- [mayn]]
+                   if b then
+                     do sequence_ [ addClause sat [total .<= n] | Just n <- [mayn]]
+                        as <- sequence [ modelNumber sat n | n <- numbs ]
+                        putStrLn ( unwords (map (show2 . (+1)) as)
+                                ++ "  = " ++ show (sum as + length as)
+                                ++ case mayn of
+                                     Nothing -> ""
+                                     Just n  -> " (<= " ++ show (n+length as) ++ "?)"
+                                 )
+                        opti (Just (sum as - 1))
+                    else
+                     do putStrLn "(sum is optimal)"
+          --opti Nothing
+          solve sat []
+          as <- sequence [ modelNumber sat n | n <- numbs ]
+          let mopti [] =
+                do putStrLn "(maxima are optimal)"
+          
+              mopti nas =
+                do b <- solve sat ( numb .<= (a-1)
+                                  : [ numb .<= a | numb <- tail mnumbs ]
+                                 ++ [ numb .<= (a-1) | (numb,_) <- inumbs ]
+                                  )
+                   if b then
+                     do as <- sequence [ modelNumber sat num | num <- numbs ]
+                        putStrLn ( unwords (map (show2 . (+1)) as)
+                                ++ "  = " ++ show (sum as + length as)
+                                 )
+                        nas' <- sequence [ do a <- modelNumber sat num
+                                              return (num,a)
+                                         | (num,_) <- nas
+                                         ]
+                        mopti nas'
+                    else
+                     do addClause sat [ numb .<= a ]
+                        mopti ( [ (numb,a) | numb <- tail mnumbs ] ++ inumbs )
+                where
+                 a       = maximum (map snd nas)
+                 mnumbs  = [ num | (num,a') <- nas, a == a' ]
+                 numb    = head mnumbs
+                 inumbs  = [ (num,a') | (num,a') <- nas, a' < a ]
+               
+              (x,_) `first2` (y,_) = x `compare` y
+          
+          mopti [ (numb, a) | (numb,a) <- numbs `zip` as ]
+      else
+       do putStrLn "** NO SOLUTION FOUND **"
 
-     case (b, mobj) of
-       (True, Just (tp,attr)) ->
-         do putStrLn "-- OPTIMIZING --"
-            let attr' = head [ length ins + length (takeWhile (/= attr) outs)
-                             | Type tp' rs <- ts
-                             , tp' == tp
-                             , Rule _ fs <- rs
-                             , Field "lhs" _ ins outs _ <- fs
-                             , attr `elem` outs
-                             ]
-            putStrLn ("trying to let " ++ show attr ++ " for " ++ tp ++ " depend on as few inputs as possible...")
-            is <- localMinimum sat [ e | (tp',es) <- ntgs, tp' == tp, (a,b,e) <- es, b == attr' ]
-            putStrLn (show attr ++ " now depends on " ++ show (length is) ++ " inputs")
-
-       _ ->
-         do return ()
 
 constraintsNonTerminals :: Solver -> [Type] -> [(Name,[Attr],[Attr])] -> IO [(Name,[(Attr,Attr,Lit)])]
 constraintsNonTerminals sat ts nts =
@@ -349,6 +388,30 @@ constraintsProductions sat ts nts ntgs =
   argType [f] = typeField f ++ " -> "
   argType fs  = "(" ++ concat (intersperse ", " (map typeField fs)) ++ ") -> "
 
+visitsNonTerminal :: Solver -> Int -> [(Attr,Attr,Lit)] -> IO Number
+visitsNonTerminal sat n edges =
+  do -- create all numbers
+     numbs <- sequence [ mkNumber sat n | _ <- attrs ]
+     let table = attrs `zip` numbs
+     
+     -- add constraints about visits
+     sequence_
+       [ do leqOr sat [neg x] na nb
+            ltOr  sat [x]     nb na
+       | (a,b,x) <- edges
+       , (a',na) <- table
+       , a == a'
+       , (b',nb) <- table
+       , b == b'
+       ]
+     
+     -- take the "maximum"
+     maxi <- mkNumber sat n
+     sequence_ [ leqOr sat [] numb maxi | numb <- numbs ]
+     return maxi
+ where
+  attrs = nub [ c | (a,b,_) <- edges, c <- [a,b] ]
+
 --------------------------------------------------------------------------------
 
 solveStats :: Solver -> IO ()
@@ -359,89 +422,120 @@ solveStats sat =
 
 --------------------------------------------------------------------------------
 
-localMinimum :: Solver -> [Lit] -> IO [Lit]
-localMinimum sat xs =
-  do a <- newLit sat
-     let try xs =
-           do putStrLn ("currently, " ++ show (length xs) ++ " literals")
-              addClause sat (map neg (a : xs)) -- "if a, then one of the xs must be False"
-              b <- solve sat [a]
-              solveStats sat
-              if b then
-                do xbs <- sequence [ do v <- modelValue sat x
-                                        return (x,v)
-                                   | x <- xs
-                                   ]
-                   sequence_ [ addClause sat [neg a, x] | (x,b) <- xbs, b /= Just True ]
-                   try [ x | (x,Just True) <- xbs ]
-               else
-                do addClause sat [neg a]
-                   return xs
-      in try xs
+data Number = N [Lit] Lit
+
+mkNumber :: Solver -> Int -> IO Number
+mkNumber sat k =
+  do tr <- newLit sat
+     addClause sat [tr]
+     xs <- sequence [ newLit sat | _ <- [1..k] ]
+     sequence_ [ addClause sat [neg a, b] | (a,b) <- xs `zip` drop 1 xs ]
+     return (N xs tr) 
+
+leqOr :: Solver -> [Lit] -> Number -> Number -> IO ()
+leqOr sat pre (N xs _) (N ys _) = leq (reverse xs) (reverse ys)
+ where
+  leq (x:xs) (y:ys) =
+    do addClause sat (pre ++ [neg x, y])
+       leq xs ys
+  
+  leq (x:xs) [] =
+    do addClause sat (pre ++ [neg x])
+       leq xs []
+  
+  leq [] _ =
+    do return ()
+
+ltOr :: Solver -> [Lit] -> Number -> Number -> IO ()
+ltOr sat pre a b = leqOr sat pre (plus1 a) b
+
+plus1 :: Number -> Number
+plus1 (N xs tr) = N (xs ++ [tr]) tr
+
+plus :: Solver -> Number -> Number -> IO Number
+plus sat (N xs tr) (N ys _) =
+  do zs <- map fromJust `fmap` merge sat (map Just xs) (map Just ys)
+     return (N zs tr)
+
+plusList :: Solver -> [Number] -> IO Number
+plusList sat as = go (sortBy first [ (length xs, a) | a@(N xs _) <- as ])
+ where
+  go [] =
+    do mkNumber sat 0
+  
+  go [(_,a)] =
+    do return a
+  
+  go ((n,a):(m,b):as) =
+    do c <- plus sat a b
+       go (insertBy first (n+m,c) as)
+
+  (x,_) `first` (y,_) = x `compare` y
 
 --------------------------------------------------------------------------------
 
-globalMinimum :: Solver -> [Lit] -> IO [Lit]
-globalMinimum sat xs =
-  do ys <- sort sat xs
-     let mini (i,j) | i >= j =
-           do return ()
-         
-         mini (i,j) =
-           do putStrLn ("trying " ++ show (i,j))
-              b <- solve sat [neg (ys !! k)]
-              solveStats sat
-              if b then mini (k+1,j)
-                   else mini (i,k)
-          where
-           k = (i+j) `div` 2
-      in mini (0,length ys)
-     xbs <- sequence [ do v <- modelValue sat x
-                          return (x,v)
-                     | x <- xs
-                     ]
-     return [ x | (x,Just True) <- xbs ]
- where
-  sort sat []  = do return []
-  sort sat [x] = do return [x]
-  sort sat xs  = do as <- sort sat (take k xs)
-                    bs <- sort sat (drop k xs)
-                    map fromJust `fmap` merge (map Just as) (map Just bs)
-   where
-    k = length xs `div` 2
+(.<=), (.>=) :: Number -> Int -> Lit
+N xs true .<= k | length xs <= k = true
+                | k < 0          = neg true
+                | otherwise      = neg (xs !! (length xs - 1 - k))
 
-  merge2 Nothing b = return (b, Nothing)
-  merge2 a Nothing = return (a, Nothing)
-  merge2 (Just x) (Just y) =
-    do a <- newLit sat
-       b <- newLit sat
-       addClause sat [neg x, b]
-       addClause sat [neg y, b]
-       addClause sat [neg x, neg y, a]
-       addClause sat [x, neg a]
-       addClause sat [y, neg a]
-       addClause sat [x, y, neg b]
-       return (Just a,Just b)
-  
-  merge []  bs  = return bs
-  merge as  []  = return as
-  merge [a] [b] = (\(a,b) -> [a,b]) `fmap` merge2 a b
-  merge as  bs  = take (a+b) `fmap` merge' (as ++ xas) (bs ++ xbs)
-   where
-    a   = length as
-    b   = length bs
-    m   = a `max` b
-    n   = if even m then m else m+1
-    xas = replicate (n-a) Nothing
-    xbs = replicate (n-b) Nothing
-  
+N xs true .>= k | length xs < k  = neg true
+                | k <= 0         = true
+                | otherwise      = xs !! (length xs - k)
+
+--------------------------------------------------------------------------------
+
+modelNumber :: Solver -> Number -> IO Int
+modelNumber sat (N xs _) =
+  do bs <- sequence [ modelValue sat x | x <- xs ]
+     if sort bs /= bs then print bs else return ()
+     return (length [ () | b <- bs, b /= Just False ])
+
+--------------------------------------------------------------------------------
+
+xsort :: Solver -> [Lit] -> IO [Lit]
+xsort sat []  = do return []
+xsort sat [x] = do return [x]
+xsort sat xs  = do as <- xsort sat (take k xs)
+                   bs <- xsort sat (drop k xs)
+                   map fromJust `fmap` merge sat (map Just as) (map Just bs)
+ where
+  k = length xs `div` 2
+
+merge2 :: Solver -> Maybe Lit -> Maybe Lit -> IO [Maybe Lit]
+merge2 sat Nothing b = return [b, Nothing]
+merge2 sat a Nothing = return [a, Nothing]
+merge2 sat (Just x) (Just y) =
+  do a <- newLit sat
+     b <- newLit sat
+     addClause sat [neg x, b]
+     addClause sat [neg y, b]
+     addClause sat [neg x, neg y, a]
+     addClause sat [x, neg a]
+     addClause sat [y, neg a]
+     addClause sat [x, y, neg b]
+     return [Just a,Just b]
+
+merge :: Solver -> [Maybe Lit] -> [Maybe Lit] -> IO [Maybe Lit]
+merge sat []  bs  = return bs
+merge sat as  []  = return as
+merge sat [a] [b] = merge2 sat a b
+merge sat as  bs  = take (a+b) `fmap` merge' (as ++ xas) (bs ++ xbs)
+ where
+  a   = length as
+  b   = length bs
+  m   = a `max` b
+  n   = if even m then m else m+1
+  xas = replicate (n-a) Nothing
+  xbs = replicate (n-b) Nothing
+
   -- pre: as and bs have the same, even length
   merge' as bs =
-    do xs <- merge eas ebs
-       ys <- merge oas obs
+    do xs <- merge sat eas ebs
+       ys <- merge sat oas obs
        let x:xys = weave xs ys
-       xys' <- sequence [ merge2 a b | (a,b) <- pairs xys ]
-       return (x : unpairs xys' ++ [last xys])
+       xys' <- sequence [ merge2 sat a b | (a,b) <- pairs xys ]
+       return (x : concat xys' ++ [last xys])
    where
     (eas,oas) = evenOdds as
     (ebs,obs) = evenOdds bs
@@ -454,10 +548,10 @@ globalMinimum sat xs =
 
   pairs (x:y:xs) = (x,y) : pairs xs
   pairs _        = []
-  
+
   unpairs ((x,y):xys) = x : y : unpairs xys
   unpairs []          = []
-  
+
   weave (x:xs) (y:ys) = x : y : weave xs ys
   weave xs     ys     = xs ++ ys
 
