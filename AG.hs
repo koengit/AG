@@ -119,126 +119,6 @@ splitWhile p (x:xs)
 
 --------------------------------------------------------------------------------
 
-type Node  = Int
-type Map b = M.IntMap b
-
---------------------------------------------------------------------------------
-
-data Color = Blue | Green
- deriving ( Eq, Ord, Show )
-
-type Edge  = (Node,Node,Lit,Color)
-
-type Neigh = (Node,Lit,Color)
-
-type Graph = Map (Map Lit, Map Lit) -- (green,blue)
-
-mkGraph :: Solver -> [Edge] -> IO Graph
-mkGraph sat tups =
-  do tups' <- smashEdges sat tups
-     let greens = [ [(a, (M.singleton b e,M.empty)), 
-                     (b, (M.singleton a (neg e),M.empty))]
-                  | (a,b,e,Green) <- tups'
-                  ]
-     let blues = [ [(a, (M.empty, M.singleton b e)),
-                     (b, (M.empty, M.singleton a (neg e)))]
-                  | (a,b,e,Blue) <- tups'
-                  ]
-     return $ M.fromListWith comb $ concat $ blues ++ greens
-       where comb (g1,b1) (g2,b2) = (g1 `M.union` g2, b1 `M.union` b2)
-
-smashEdges :: Solver -> [Edge] -> IO [Edge]
-smashEdges sat = sequence . map smash . groupBy nodes . sort . map norm
- where
-  norm (a,b,e,c) | a <= b    = (a,b,e,c)
-                 | otherwise = (b,a,neg e,c)
-
-  (a1,b1,_,_) `nodes` (a2,b2,_,_) = (a1,b1) == (a2,b2)
-  
-  smash [t] =
-    do return t
-
-  smash ((a,b,e1,c1):(_,_,e2,c2):ts) =
-    do e <- smashEdge e1 e2
-       smash ((a,b,e,smashColor c1 c2):ts)
-  
-  smashEdge e1 e2 =
-    do addClause sat [neg e1, e2]
-       addClause sat [e1, neg e2]
-       return e1
-
-  -- what happens when we return Blue here?
-  smashColor Green _ = Green
-  smashColor _ Green = Green
-  smashColor _ _     = Blue
-
-
-remNode :: Node -> Graph -> Graph
-remNode node g = M.map (\(g,b) -> (M.delete node g, M.delete node b)) $ 
-                 M.delete node g
-
-addBlue :: Node -> Node -> Lit -> Graph -> Graph
-addBlue a b e = single a b e . single b a (neg e) where
-  single :: Node -> Node -> Lit -> Graph -> Graph
-  single a b e = M.adjustWithKey (\_ (mg,mb) -> (mg, M.insert b e mb)) a
-
---------------------------------------------------------------------------------
-
--- rules:
--- 1. No edges from a node to itself i.e. (x,x,_,_)
--- 2. we never have to consider cycles with two or more adjacent green edges
--- 3. new edges are always blue
-
-noCycles :: Solver -> Graph -> IO ()
-noCycles sat graph | M.null graph =
-  do return ()
-noCycles sat graph =
-  do g' <- foldM (\g (p,q) -> triangle sat p q g) graph (bluePairs neighs)
-     noCycles sat (remNode node g')
- where
-   node        = snd $ minimum [ (weight xs, a) | (a,xs) <- M.toList graph ]
-   Just neighs = M.lookup node graph
-
-bluePairs :: (Map Lit, Map Lit) -> [(Neigh,Neigh)]
-bluePairs (mg,mb) = [ (p,q) | p <- greens, q <- blues ] ++ pairs blues
- where
-  greens = [ (n,l,Green) | (n,l) <- M.toList mg ]
-  blues  = [ (n,l,Blue)  | (n,l) <- M.toList mb ]
-
-
-weight :: (Map Lit, Map Lit) -> Int
-weight (mg,mb) = g * b + b * b
- where
-  g = M.size mg
-  b = M.size mb
-
-triangle :: Solver -> Neigh -> Neigh -> Graph -> IO Graph
-triangle sat (a,ea,ca) (b,eb,cb) graph =
-  case M.lookup a graph of
-    Just (mg,mb) ->
-      case M.lookup b mg of -- green edge
-        Just ab -> if ca == Blue && cb == Blue
-                   then addTriangle ea eb ab
-                   else return graph
-        Nothing -> case M.lookup b mb of -- blue edge
-          Nothing ->
-            do ab <- newLit sat
-               addTriangle ea eb ab
-               return $ addBlue a b ab graph
-          Just ab -> addTriangle ea eb ab
- where
-  addTriangle ea eb ab =
-    do addClause sat [ea,ab,neg eb]     -- one must point n -> a -> b -> n
-       addClause sat [neg ea,neg ab,eb] -- one must point n <- a <- b <- n
-       return graph
-
-
-pairs :: [a] -> [(a,a)]
-pairs []     = []
-pairs (x:xs) = [ (x,y) | y <- xs ] ++ pairs xs
-
---------------------------------------------------------------------------------
-
 type Args = (FilePath, Maybe (Name, Attr))
 
 parseArgs :: IO Args
@@ -273,58 +153,6 @@ main =
      solveStats sat
      if b then
        do putStrLn "++ SOLUTION FOUND ++"
-          numbs <- sequence [ visitsNonTerminal sat 50 edges | (_,edges) <- ntgs ]
-          total@(N xs _) <- plusList sat numbs
-          let show2 x | x < 10    = " " ++ show x
-                      | otherwise = show x
-          
-              opti mayn =
-                do b <- solve sat [total .<= n | Just n <- [mayn]]
-                   if b then
-                     do sequence_ [ addClause sat [total .<= n] | Just n <- [mayn]]
-                        as <- sequence [ modelNumber sat n | n <- numbs ]
-                        putStrLn ( unwords (map (show2 . (+1)) as)
-                                ++ "  = " ++ show (sum as + length as)
-                                ++ case mayn of
-                                     Nothing -> ""
-                                     Just n  -> " (<= " ++ show (n+length as) ++ "?)"
-                                 )
-                        opti (Just (sum as - 1))
-                    else
-                     do putStrLn "(sum is optimal)"
-          opti Nothing
-          --solve sat []
-          as <- sequence [ modelNumber sat n | n <- numbs ]
-          let mopti [] =
-                do putStrLn "(maxima are optimal)"
-          
-              mopti nas =
-                do b <- solve sat ( numb .<= (a-1)
-                                  : [ numb .<= a | numb <- tail mnumbs ]
-                                 ++ [ numb .<= (a-1) | (numb,_) <- inumbs ]
-                                  )
-                   if b then
-                     do as <- sequence [ modelNumber sat num | num <- numbs ]
-                        putStrLn ( unwords (map (show2 . (+1)) as)
-                                ++ "  = " ++ show (sum as + length as)
-                                 )
-                        nas' <- sequence [ do a <- modelNumber sat num
-                                              return (num,a)
-                                         | (num,_) <- nas
-                                         ]
-                        mopti nas'
-                    else
-                     do addClause sat [ numb .<= a ]
-                        mopti ( [ (numb,a) | numb <- tail mnumbs ] ++ inumbs )
-                where
-                 a       = maximum (map snd nas)
-                 mnumbs  = [ num | (num,a') <- nas, a == a' ]
-                 numb    = head mnumbs
-                 inumbs  = [ (num,a') | (num,a') <- nas, a' < a ]
-               
-              (x,_) `first2` (y,_) = x `compare` y
-          
-          mopti [ (numb, a) | (numb,a) <- numbs `zip` as ]
       else
        do putStrLn "** NO SOLUTION FOUND **"
 
@@ -333,15 +161,33 @@ constraintsNonTerminals :: Solver -> [Type] -> [(Name,[Attr],[Attr])] -> IO [(Na
 constraintsNonTerminals sat ts nts =
   do putStrLn "-- Non-Terminals --"
      sequence
-       [ do putStr ("data " ++ tp ++ " ... ")
-            hFlush stdout
-            es <- sequence [ do l <- newLit sat
-                                return (a,b,l)
-                           | (a,b) <- insOuts ts tp
+       [ do let ios       = insOuts ts tp
+                maxVisits = length ins `min` length outs `min` 11
+            putStrLn ("data " ++ tp ++ " ... max. " ++ show maxVisits ++ " visits")
+            
+            -- create edges
+            es <- sequence [ do x <- newLit sat
+                                return (a,b,x)
+                           | (a,b) <- ios
                            ]
-            g <- mkGraph sat [ (a, b, e, Blue) | (a, b, e) <- es ]
-            noCycles sat g
-            putStrLn (show (length es) ++ " edges")
+            
+            -- create all numbers
+            let attrs = nub [ c | (a,b) <- ios, c <- [a,b] ]
+            numbs <- sequence [ mkNumber sat maxVisits | _ <- attrs ]
+            let table = attrs `zip` numbs
+            
+            -- add constraints about visits
+            sequence_
+              [ do leqOr sat [neg x] na nb
+                   ltOr  sat [x]     nb na
+              | (a,b,x) <- es
+              , (a',na) <- table
+              , a == a'
+              , (b',nb) <- table
+              , b == b'
+              ]
+            
+            -- return edges
             return (tp, es)
        | t <- ts
        , let (tp, ins, outs) = ntAttrs t
@@ -353,21 +199,35 @@ constraintsProductions sat ts nts ntgs =
      true <- newLit sat
      addClause sat [true]
      sequence_
-       [ do putStr (r ++ " :: " ++ argType fs ++ tp ++ " ... ")
-            hFlush stdout
-            g <- mkGraph sat graph
-            noCycles sat g
-            putStrLn (show (M.size g) ++ " nodes")
+       [ do putStrLn (r ++ " :: " ++ argType fs ++ tp ++ " ... max. " ++ show maxVisits ++ " visits")
+            
+            -- create all numbers
+            let attrs = nub [ c | (a,b,_) <- graph, c <- [a,b] ]
+            numbs <- sequence [ mkNumber sat maxVisits | _ <- attrs ]
+            let table = attrs `zip` numbs
+            
+            -- add constraints about visits
+            sequence_
+              [ do ltOr sat [neg x] na nb
+                   when (x /= true) $ ltOr sat [x] nb na
+              | (a,b,x) <- graph
+              , (a',na) <- table
+              , a == a'
+              , (b',nb) <- table
+              , b == b'
+              ]
        | Type tp rs <- ts
        , Rule r fs <- rs
-       , let graph = concat
+       , let maxVisits = sum [ length ins `min` length outs | Field fld tp ins outs deps <- fs ]
+       
+             graph = concat
                      [ -- edges from production rule
-                       [ (a, b, true, Blue)
+                       [ (a, b, true)
                        | (a,b) <- deps
                        , assert "self-loop" (a /= b)
                        ]
                        -- edges from non-terminal
-                    ++ [ (inn a, out b, e, Green)
+                    ++ [ (inn a, out b, e)
                        | (a, b, e) <- es
                        ]
                      | Field fld tp ins outs deps <- fs
@@ -387,30 +247,6 @@ constraintsProductions sat ts nts ntgs =
   argType []  = ""
   argType [f] = typeField f ++ " -> "
   argType fs  = "(" ++ concat (intersperse ", " (map typeField fs)) ++ ") -> "
-
-visitsNonTerminal :: Solver -> Int -> [(Attr,Attr,Lit)] -> IO Number
-visitsNonTerminal sat n edges =
-  do -- create all numbers
-     numbs <- sequence [ mkNumber sat n | _ <- attrs ]
-     let table = attrs `zip` numbs
-     
-     -- add constraints about visits
-     sequence_
-       [ do leqOr sat [neg x] na nb
-            ltOr  sat [x]     nb na
-       | (a,b,x) <- edges
-       , (a',na) <- table
-       , a == a'
-       , (b',nb) <- table
-       , b == b'
-       ]
-     
-     -- take the "maximum"
-     maxi <- mkNumber sat n
-     sequence_ [ leqOr sat [] numb maxi | numb <- numbs ]
-     return maxi
- where
-  attrs = nub [ c | (a,b,_) <- edges, c <- [a,b] ]
 
 --------------------------------------------------------------------------------
 
